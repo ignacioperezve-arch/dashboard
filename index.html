@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Estación Meteorológica UV — Framework IoT</title>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --sky:#0B3D6E;--sky-mid:#1565A8;--sky-light:#4A9FD4;--sky-pale:#B8DEFA;
+  --ocean:#0D5C63;--teal:#1B9AAA;--teal-light:#5BC8D5;
+  --amber:#E8971A;--amber-light:#F5C259;--coral:#E55A2B;
+  --mist:rgba(255,255,255,0.08);--mist-border:rgba(255,255,255,0.12);
+  --card-bg:rgba(11,61,110,0.35);--card-border:rgba(74,159,212,0.25);
+  --font-display:'Syne',sans-serif;--font-mono:'Space Mono',monospace;
+}
+html,body{height:100%;background:#041624;}
+#dashboard{
+  font-family:var(--font-display);
+  background:linear-gradient(160deg,#041624 0%,#0B2C47 40%,#0A3850 70%,#0D4A5C 100%);
+  min-height:100vh;color:white;position:relative;overflow-x:hidden;
+}
+#dashboard::before{
+  content:'';position:fixed;inset:0;pointer-events:none;
+  background-image:radial-gradient(circle at 20% 30%,rgba(27,154,170,0.08) 0%,transparent 50%),
+    radial-gradient(circle at 80% 70%,rgba(21,101,168,0.12) 0%,transparent 50%),
+    radial-gradient(circle at 50% 10%,rgba(232,151,26,0.04) 0%,transparent 40%);
+}
+.grid-dots{
+  position:fixed;inset:0;pointer-events:none;
+  background-image:radial-gradient(circle,rgba(255,255,255,0.04) 1px,transparent 1px);
+  background-size:28px 28px;
+}
+/* HEADER */
+.header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:18px 28px 14px;border-bottom:1px solid var(--mist-border);
+  position:sticky;top:0;z-index:100;
+  background:rgba(4,22,36,0.85);backdrop-filter:blur(12px);
+}
+.header-left{display:flex;align-items:center;gap:14px;}
+.station-icon{
+  width:42px;height:42px;border:1.5px solid var(--teal-light);
+  border-radius:10px;display:flex;align-items:center;justify-content:center;
+  background:rgba(27,154,170,0.15);
+}
+.station-icon svg{width:22px;height:22px;stroke:var(--teal-light);fill:none;stroke-width:1.8;}
+.station-name{font-size:11px;font-weight:600;letter-spacing:.15em;color:var(--teal-light);text-transform:uppercase;margin-bottom:2px;}
+.project-title{font-size:13px;font-weight:700;color:white;line-height:1;}
+.header-right{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+.status-pill{
+  display:flex;align-items:center;gap:7px;
+  background:rgba(27,154,170,0.15);border:1px solid rgba(27,154,170,0.3);
+  border-radius:20px;padding:5px 12px;
+  font-family:var(--font-mono);font-size:10px;color:var(--teal-light);
+}
+.status-dot{width:6px;height:6px;border-radius:50%;background:#888;transition:background .5s;}
+.status-dot.connected{background:#4DFFD2;animation:pulse 2s ease infinite;}
+.status-dot.error{background:#F43F5E;}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(1.4)}}
+.mqtt-badge{
+  font-family:var(--font-mono);font-size:10px;
+  background:rgba(232,151,26,0.12);border:1px solid rgba(232,151,26,0.3);
+  color:var(--amber-light);border-radius:6px;padding:4px 10px;letter-spacing:.08em;
+}
+/* CONNECTION STATUS BAR */
+#conn-bar{
+  font-family:var(--font-mono);font-size:10px;
+  padding:6px 28px;background:rgba(244,63,94,0.12);
+  border-bottom:1px solid rgba(244,63,94,0.25);color:#FDA4AF;
+  display:flex;align-items:center;gap:8px;
+  transition:all .5s;
+}
+#conn-bar.hidden{display:none;}
+#conn-bar.ok{background:rgba(77,255,210,0.08);border-bottom-color:rgba(77,255,210,0.2);color:#4DFFD2;}
+/* MAIN GRID */
+.sections-wrap{
+  display:grid;grid-template-columns:1fr 1fr;
+  position:relative;z-index:10;
+}
+.section{padding:20px 22px 28px;border-right:1px solid var(--mist-border);}
+.section:last-child{border-right:none;}
+.section-header{
+  display:flex;align-items:center;gap:10px;
+  margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--mist-border);
+}
+.section-icon{
+  width:32px;height:32px;border-radius:8px;
+  display:flex;align-items:center;justify-content:center;
+}
+.section-icon.beysens{background:rgba(91,200,213,0.15);border:1px solid rgba(91,200,213,0.3);}
+.section-icon.station{background:rgba(232,151,26,0.15);border:1px solid rgba(232,151,26,0.3);}
+.section-icon svg{width:16px;height:16px;fill:none;stroke-width:1.8;}
+.section-icon.beysens svg{stroke:var(--teal-light);}
+.section-icon.station svg{stroke:var(--amber-light);}
+.section-title{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;line-height:1;}
+.section-title.beysens{color:var(--teal-light);}
+.section-title.station{color:var(--amber-light);}
+.section-subtitle{font-size:10px;color:rgba(255,255,255,.4);margin-top:2px;font-family:var(--font-mono);}
+/* CARDS */
+.vars-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.var-card{
+  background:var(--card-bg);border:1px solid var(--card-border);
+  border-radius:12px;padding:12px 14px;position:relative;overflow:hidden;
+  transition:border-color .4s,box-shadow .4s;
+}
+.var-card.updated{
+  border-color:rgba(91,200,213,0.6);
+  box-shadow:0 0 12px rgba(91,200,213,0.15);
+}
+.var-card::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:2px;
+  background:var(--accent-color,var(--sky-light));opacity:.6;
+}
+.var-card.full-width{grid-column:1 / -1;}
+.var-card.accent-teal{--accent-color:var(--teal-light);}
+.var-card.accent-amber{--accent-color:var(--amber);}
+.var-card.accent-coral{--accent-color:var(--coral);}
+.var-card.accent-sky{--accent-color:var(--sky-light);}
+.var-card.accent-green{--accent-color:#5DD97A;}
+.var-card.accent-purple{--accent-color:#A78BFA;}
+.var-card.accent-pink{--accent-color:#F472B6;}
+.var-label{font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.45);margin-bottom:4px;}
+.var-topic{font-family:var(--font-mono);font-size:8px;color:rgba(255,255,255,.2);margin-bottom:7px;word-break:break-all;}
+.var-value{font-family:var(--font-mono);font-size:22px;font-weight:700;line-height:1;color:white;letter-spacing:-.02em;}
+.var-value.large{font-size:26px;}
+.var-unit{font-size:11px;color:rgba(255,255,255,.45);font-weight:400;margin-left:3px;}
+.var-icon{position:absolute;right:10px;top:10px;width:28px;height:28px;opacity:.18;}
+.var-icon svg{width:28px;height:28px;fill:white;}
+.var-icon svg.st{fill:none;stroke:white;stroke-width:1.5;}
+/* Connecting blink */
+.awaiting{font-family:var(--font-mono);font-size:10px;color:rgba(255,255,255,.25);margin-top:4px;}
+.blink{animation:blink 1.5s step-end infinite;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+/* Bars */
+.bar-bg{height:4px;background:rgba(255,255,255,.1);border-radius:2px;margin-top:6px;overflow:hidden;}
+.bar-fill{height:100%;border-radius:2px;transition:width 1.2s ease;}
+.bar-hum{background:var(--teal-light);}
+.bar-hum-int{background:var(--amber-light);}
+.bar-solar{background:linear-gradient(90deg,var(--amber),#FFF176);}
+/* Wind rose */
+.wind-rose-wrap{display:flex;align-items:center;gap:14px;}
+.wind-dir-display{font-family:var(--font-mono);font-size:28px;font-weight:700;color:var(--teal-light);line-height:1;margin-bottom:4px;}
+.wind-dir-deg{font-size:12px;color:rgba(255,255,255,.4);}
+/* Dew point */
+.dew-box{background:rgba(27,154,170,.08);border:1px dashed rgba(91,200,213,.3);border-radius:10px;padding:10px 12px;margin-top:4px;}
+.dew-formula{font-size:8px;color:rgba(255,255,255,.25);font-family:var(--font-mono);margin-bottom:4px;line-height:1.5;}
+.dew-value{font-family:var(--font-mono);font-size:28px;font-weight:700;color:#5BC8D5;}
+/* Cloud placeholder */
+.cloud-box{background:rgba(255,255,255,.03);border:1px dashed rgba(255,255,255,.15);border-radius:8px;padding:8px 10px;display:flex;align-items:center;gap:8px;}
+.cloud-coming{font-size:9px;color:rgba(255,255,255,.3);font-style:italic;font-family:var(--font-mono);}
+/* UV */
+.uv-track{height:5px;border-radius:3px;background:rgba(255,255,255,.08);position:relative;overflow:hidden;margin-top:6px;}
+.uv-fill{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:linear-gradient(90deg,#4ADE80 0%,#FACC15 40%,#FB923C 70%,#F43F5E 100%);transition:width 1.2s ease;}
+.uv-scale{display:flex;justify-content:space-between;margin-top:3px;font-family:var(--font-mono);font-size:7px;color:rgba(255,255,255,.2);}
+/* Pressure trend */
+.pres-trend{font-size:9px;color:rgba(255,255,255,.4);margin-top:4px;font-family:var(--font-mono);}
+/* Temp compare */
+.temp-comparison{display:flex;gap:6px;margin-top:6px;}
+.temp-chip{flex:1;text-align:center;padding:6px 4px;border-radius:7px;font-family:var(--font-mono);}
+.temp-chip.ext{background:rgba(91,200,213,.1);border:1px solid rgba(91,200,213,.25);}
+.temp-chip.int{background:rgba(232,151,26,.1);border:1px solid rgba(232,151,26,.25);}
+.temp-chip-label{font-size:8px;color:rgba(255,255,255,.35);}
+.temp-chip-val{font-size:18px;font-weight:700;}
+.temp-chip.ext .temp-chip-val{color:var(--teal-light);}
+.temp-chip.int .temp-chip-val{color:var(--amber-light);}
+/* Bottom strip */
+.bottom-strip{
+  position:relative;z-index:10;border-top:1px solid var(--mist-border);
+  padding:8px 28px;display:flex;align-items:center;justify-content:space-between;
+  background:rgba(4,22,36,.5);
+}
+.qos-badges{display:flex;gap:8px;}
+.qos-badge{
+  font-family:var(--font-mono);font-size:9px;letter-spacing:.08em;
+  padding:3px 8px;border-radius:5px;
+  background:rgba(91,200,213,.1);border:1px solid rgba(91,200,213,.25);
+  color:rgba(91,200,213,.7);
+}
+/* Last update flash */
+.last-update{font-family:var(--font-mono);font-size:9px;color:rgba(255,255,255,.25);}
+</style>
+</head>
+<body>
+<div id="dashboard">
+  <div class="grid-dots"></div>
+
+  <!-- CONNECTION BAR -->
+  <div id="conn-bar">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <span id="conn-msg">Conectando al broker MQTT 161.35.98.146…</span>
+  </div>
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="header-left">
+      <div class="station-icon">
+        <svg viewBox="0 0 24 24"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+      </div>
+      <div>
+        <div class="station-name">UV — Estación Meteorológica · Valparaíso</div>
+        <div class="project-title">Framework IoT · Colectores Activos de Agua de Rocío</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="last-update">última actualización: <span id="last-ts">—</span></div>
+      <div class="mqtt-badge">MQTT · QoS(1) · RETAIN</div>
+      <div class="status-pill">
+        <div class="status-dot" id="sdot"></div>
+        <span id="conn-label">Conectando…</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN CONTENT -->
+  <div class="sections-wrap">
+
+    <!-- ===== ZONA BEYSENS ===== -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon beysens">
+          <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <div>
+          <div class="section-title beysens">Variables — Ecuación de Daniel Beysens</div>
+          <div class="section-subtitle">Modelo de condensación de rocío atmosférico</div>
+        </div>
+      </div>
+
+      <div class="vars-grid">
+
+        <!-- Temperatura Exterior -->
+        <div class="var-card accent-teal" id="card-temp-ext">
+          <div class="var-icon"><svg class="st" viewBox="0 0 24 24"><path d="M14 14.76V3.5a2.5 2.5 0 00-5 0v11.26a4.5 4.5 0 105 0z"/></svg></div>
+          <div class="var-label">Temperatura Exterior</div>
+          <div class="var-topic">weather/temperatura_exterior</div>
+          <div class="var-value large" id="temp-ext">—<span class="var-unit">°C</span></div>
+          <div class="awaiting" id="aw-temp-ext">Aguardando<span class="blink">_</span></div>
+        </div>
+
+        <!-- Humedad Exterior -->
+        <div class="var-card accent-sky" id="card-hum-ext">
+          <div class="var-icon"><svg viewBox="0 0 24 24"><path d="M12 2.69l5.66 5.66a8 8 0 11-11.31 0z"/></svg></div>
+          <div class="var-label">Humedad Exterior</div>
+          <div class="var-topic">weather/humedad_exterior</div>
+          <div class="var-value large" id="hum-ext">—<span class="var-unit">%</span></div>
+          <div class="bar-bg"><div class="bar-fill bar-hum" id="bar-hum-ext" style="width:0%"></div></div>
+        </div>
+
+        <!-- Velocidad Viento → m/s -->
+        <div class="var-card accent-green" id="card-wind-ms">
+          <div class="var-icon"><svg class="st" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg></div>
+          <div class="var-label">Velocidad del Viento</div>
+          <div class="var-topic">weather/velocidad_viento → conv. m/s</div>
+          <div class="var-value large" id="wind-ms">—<span class="var-unit">m/s</span></div>
+          <div class="awaiting" id="wind-orig" style="font-size:9px;color:rgba(255,255,255,.3);">— km/h (origen)</div>
+        </div>
+
+        <!-- Presión -->
+        <div class="var-card accent-purple" id="card-presion">
+          <div class="var-icon"><svg class="st" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg></div>
+          <div class="var-label">Presión Atmosférica</div>
+          <div class="var-topic">weather/presion</div>
+          <div class="var-value" id="presion">—<span class="var-unit">hPa</span></div>
+          <div class="pres-trend" id="pres-trend-b">— tendencia</div>
+        </div>
+
+        <!-- Fecha -->
+        <div class="var-card accent-amber" id="card-fecha">
+          <div class="var-label">Fecha</div>
+          <div class="var-topic">weather/fecha</div>
+          <div class="var-value" style="font-size:16px" id="fecha">—</div>
+        </div>
+
+        <!-- Hora Local -->
+        <div class="var-card accent-amber" id="card-hora">
+          <div class="var-label">Hora Local</div>
+          <div class="var-topic">weather/hora_local</div>
+          <div class="var-value" style="font-size:18px" id="hora-local">—:—:—</div>
+        </div>
+
+        <!-- Rosa de los Vientos -->
+        <div class="var-card accent-teal full-width" id="card-rosa">
+          <div class="var-label">Rosa de los Vientos</div>
+          <div class="var-topic">weather/direccion_rosa · weather/direccion_viento</div>
+          <div class="wind-rose-wrap">
+            <svg width="90" height="90" viewBox="0 0 90 90">
+              <circle cx="45" cy="45" r="40" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="1"/>
+              <circle cx="45" cy="45" r="27" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="1"/>
+              <circle cx="45" cy="45" r="14" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="1"/>
+              <line x1="45" y1="7" x2="45" y2="83" stroke="rgba(255,255,255,.08)" stroke-width=".5"/>
+              <line x1="7" y1="45" x2="83" y2="45" stroke="rgba(255,255,255,.08)" stroke-width=".5"/>
+              <line x1="17" y1="17" x2="73" y2="73" stroke="rgba(255,255,255,.05)" stroke-width=".5"/>
+              <line x1="73" y1="17" x2="17" y2="73" stroke="rgba(255,255,255,.05)" stroke-width=".5"/>
+              <text x="45" y="12" text-anchor="middle" font-size="8" fill="rgba(255,255,255,.5)" font-family="Space Mono">N</text>
+              <text x="45" y="86" text-anchor="middle" font-size="8" fill="rgba(255,255,255,.5)" font-family="Space Mono">S</text>
+              <text x="84" y="48" text-anchor="start" font-size="8" fill="rgba(255,255,255,.5)" font-family="Space Mono">E</text>
+              <text x="3" y="48" text-anchor="start" font-size="8" fill="rgba(255,255,255,.5)" font-family="Space Mono">O</text>
+              <g id="wind-arrow" style="transform-origin:45px 45px;transition:transform 1.4s ease;">
+                <polygon points="45,9 50,45 45,38 40,45" fill="#5BC8D5" opacity=".9"/>
+                <polygon points="45,81 50,45 45,52 40,45" fill="rgba(91,200,213,.3)"/>
+              </g>
+            </svg>
+            <div>
+              <div class="wind-dir-display" id="wind-dir-text">—</div>
+              <div class="wind-dir-deg" id="wind-dir-deg">— grados</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Temperatura Punto de Rocío -->
+        <div class="var-card accent-teal full-width">
+          <div class="var-label">Temperatura del Punto de Rocío</div>
+          <div class="var-topic">calculado · fórmula de Magnus sobre weather/temperatura_exterior + weather/humedad_exterior</div>
+          <div class="dew-box">
+            <div class="dew-formula">γ(T,RH) = ln(RH/100) + 17.625·T / (243.04+T)<br>Td = 243.04·γ / (17.625 − γ)</div>
+            <div class="dew-value" id="dew-point">—<span style="font-size:14px;color:rgba(91,200,213,.6)"> °C</span></div>
+          </div>
+        </div>
+
+        <!-- Cobertura de Nubes -->
+        <div class="var-card accent-sky full-width">
+          <div class="var-label">Cobertura de Nubes</div>
+          <div class="var-topic">weather/cobertura_nubes (en desarrollo)</div>
+          <div class="cloud-box">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.3)" stroke-width="1.5"><path d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/></svg>
+            <div>
+              <div class="cloud-coming">Sensor en integración · tópico reservado · próximamente</div>
+              <div style="font-family:monospace;font-size:8px;color:rgba(255,255,255,.15);margin-top:2px;" id="nubes-val">— oktas / —%</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div><!-- /beysens -->
+
+    <!-- ===== ZONA ESTACIÓN ===== -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon station">
+          <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        </div>
+        <div>
+          <div class="section-title station">Estación Meteorológica Completa</div>
+          <div class="section-subtitle">Monitoreo integral de variables ambientales</div>
+        </div>
+      </div>
+
+      <div class="vars-grid">
+
+        <!-- Temperatura comparativa -->
+        <div class="var-card accent-teal full-width" id="card-temp-cmp">
+          <div class="var-label">Temperatura — Comparativa Exterior / Interior</div>
+          <div class="var-topic">weather/temperatura_exterior · weather/temperatura_interior</div>
+          <div class="temp-comparison">
+            <div class="temp-chip ext">
+              <div class="temp-chip-label">EXTERIOR</div>
+              <div class="temp-chip-val" id="cmp-ext">—°</div>
+            </div>
+            <div class="temp-chip int">
+              <div class="temp-chip-label">INTERIOR</div>
+              <div class="temp-chip-val" id="cmp-int">—°</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Humedad Interior -->
+        <div class="var-card accent-amber" id="card-hum-int">
+          <div class="var-icon"><svg viewBox="0 0 24 24"><path d="M12 2.69l5.66 5.66a8 8 0 11-11.31 0z"/></svg></div>
+          <div class="var-label">Humedad Interior</div>
+          <div class="var-topic">weather/humedad_interior</div>
+          <div class="var-value" id="hum-int">—<span class="var-unit">%</span></div>
+          <div class="bar-bg"><div class="bar-fill bar-hum-int" id="bar-hum-int" style="width:0%"></div></div>
+        </div>
+
+        <!-- Velocidad viento km/h -->
+        <div class="var-card accent-green" id="card-wind-kmh">
+          <div class="var-icon"><svg class="st" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg></div>
+          <div class="var-label">Velocidad del Viento</div>
+          <div class="var-topic">weather/velocidad_viento</div>
+          <div class="var-value" id="wind-kmh">—<span class="var-unit">km/h</span></div>
+        </div>
+
+        <!-- Velocidad Media -->
+        <div class="var-card accent-green full-width" id="card-wind-avg">
+          <div class="var-label">Velocidad Media del Viento</div>
+          <div class="var-topic">weather/velocidad_media</div>
+          <div style="display:flex;align-items:baseline;gap:10px;">
+            <div class="var-value large" id="wind-avg">—<span class="var-unit">km/h</span></div>
+            <div style="font-family:var(--font-mono);font-size:9px;color:rgba(255,255,255,.3);">promedio</div>
+          </div>
+        </div>
+
+        <!-- Lluvia -->
+        <div class="var-card accent-sky" id="card-lluvia">
+          <div class="var-icon"><svg class="st" viewBox="0 0 24 24"><path d="M20 16.58A5 5 0 0018 7h-1.26A8 8 0 104 15.25"/><line x1="8" y1="19" x2="8" y2="21"/><line x1="8" y1="13" x2="8" y2="15"/><line x1="16" y1="19" x2="16" y2="21"/><line x1="16" y1="13" x2="16" y2="15"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="12" y1="15" x2="12" y2="17"/></svg></div>
+          <div class="var-label">Lluvia</div>
+          <div class="var-topic">weather/lluvia_mm</div>
+          <div class="var-value" id="lluvia">—<span class="var-unit">mm</span></div>
+        </div>
+
+        <!-- Tendencia Presión -->
+        <div class="var-card accent-purple" id="card-pres-tend">
+          <div class="var-label">Tendencia de Presión</div>
+          <div class="var-topic">weather/presion_tendencia</div>
+          <div class="var-value" style="font-size:15px" id="pres-tend-val">—</div>
+        </div>
+
+        <!-- Índice UV -->
+        <div class="var-card accent-amber full-width" id="card-uv">
+          <div class="var-label">Radiación Ultravioleta</div>
+          <div class="var-topic">weather/uv_index</div>
+          <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px;">
+            <div class="var-value large" id="uv-val">—</div>
+            <div style="font-family:var(--font-mono);font-size:10px;color:rgba(255,255,255,.35);" id="uv-label">índice UV</div>
+          </div>
+          <div class="uv-track"><div class="uv-fill" id="uv-fill" style="width:0%"></div></div>
+          <div class="uv-scale"><span>BAJO</span><span>MODERADO</span><span>ALTO</span><span>MUY ALTO</span><span>EXTREMO</span></div>
+        </div>
+
+        <!-- Energía Solar -->
+        <div class="var-card accent-amber" id="card-solar">
+          <div class="var-icon"><svg class="st" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg></div>
+          <div class="var-label">Energía Solar</div>
+          <div class="var-topic">weather/solar_wm2</div>
+          <div class="var-value" id="solar">—<span class="var-unit">W/m²</span></div>
+          <div class="bar-bg"><div class="bar-fill bar-solar" id="bar-solar" style="width:0%"></div></div>
+        </div>
+
+        <!-- Status -->
+        <div class="var-card accent-green" id="card-status">
+          <div class="var-label">Estado del Sistema</div>
+          <div class="var-topic">weather/status</div>
+          <div class="var-value" style="font-size:13px;margin-top:4px;" id="status-val">—</div>
+        </div>
+
+        <!-- Hora UTC -->
+        <div class="var-card accent-purple" id="card-hora-utc">
+          <div class="var-label">Hora UTC</div>
+          <div class="var-topic">weather/hora_utc</div>
+          <div class="var-value" style="font-size:18px" id="hora-utc">—:—:—</div>
+        </div>
+
+        <!-- Fecha (repetida) -->
+        <div class="var-card accent-amber" id="card-fecha2">
+          <div class="var-label">Fecha</div>
+          <div class="var-topic">weather/fecha</div>
+          <div class="var-value" style="font-size:16px" id="fecha2">—</div>
+        </div>
+
+      </div>
+    </div><!-- /station -->
+
+  </div><!-- /sections-wrap -->
+
+  <div class="bottom-strip">
+    <div style="font-family:var(--font-mono);font-size:9px;color:rgba(255,255,255,.2);">
+      Proyecto Vinculación con el Medio · Universidad de Valparaíso · 2025
+    </div>
+    <div class="qos-badges">
+      <div class="qos-badge">QoS(1) · At least once</div>
+      <div class="qos-badge">RETAIN: true</div>
+      <div class="qos-badge" id="msg-counter">msgs recibidos: 0</div>
+      <div class="qos-badge" id="broker-badge">161.35.98.146:1883</div>
+    </div>
+  </div>
+
+</div><!-- /dashboard -->
+
+<script>
+// ─── MQTT CONFIG ─────────────────────────────────────────────────────────────
+const MQTT_HOST     = "161.35.98.146";
+const MQTT_PORT_WS  = 9001;          // Puerto WebSocket de Mosquitto — asegúrate de tener en mosquitto.conf: listener 9001 / protocol websockets
+const MQTT_USER     = "ignacio";
+const MQTT_PASSWORD = "Uv2025doc.";
+const MQTT_QOS      = 1;
+
+// ─── TOPICS ──────────────────────────────────────────────────────────────────
+const TOPICS = [
+  "weather/temperatura_exterior",
+  "weather/temperatura_interior",
+  "weather/humedad_exterior",
+  "weather/humedad_interior",
+  "weather/velocidad_viento",
+  "weather/velocidad_media",
+  "weather/presion",
+  "weather/presion_tendencia",
+  "weather/direccion_viento",
+  "weather/direccion_rosa",
+  "weather/fecha",
+  "weather/hora_local",
+  "weather/hora_utc",
+  "weather/lluvia_mm",
+  "weather/uv_index",
+  "weather/solar_wm2",
+  "weather/status",
+  "weather/cobertura_nubes"
+];
+
+// ─── STATE ───────────────────────────────────────────────────────────────────
+let msgCount   = 0;
+let lastPresVal = null;
+let tempExtVal  = null;
+let humExtVal   = null;
+
+const DIR_MAP = {
+  N:0,NNE:22.5,NE:45,ENE:67.5,E:90,ESE:112.5,SE:135,SSE:157.5,
+  S:180,SSO:202.5,SO:225,OSO:247.5,O:270,ONO:292.5,NO:315,NNO:337.5,
+  Norte:0,Sur:180,Este:90,Oeste:270,
+  NorEste:45,SurEste:135,SurOeste:225,NorOeste:315
+};
+
+const UV_LABELS = {
+  0:'Bajo',1:'Bajo',2:'Bajo',3:'Moderado',4:'Moderado',5:'Alto',
+  6:'Alto',7:'Muy Alto',8:'Muy Alto',9:'Extremo',10:'Extremo',11:'Extremo'
+};
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+function calcDewPoint(T, RH) {
+  if (isNaN(T) || isNaN(RH) || RH <= 0) return null;
+  const gamma = Math.log(RH / 100) + (17.625 * T) / (243.04 + T);
+  return (243.04 * gamma) / (17.625 - gamma);
+}
+
+function setText(id, html) {
+  const el = document.getElementById(id);
+  if (el) el.innerHTML = html;
+}
+
+function flashCard(cardId) {
+  const el = document.getElementById(cardId);
+  if (!el) return;
+  el.classList.add('updated');
+  setTimeout(() => el.classList.remove('updated'), 800);
+}
+
+function setBar(id, pct) {
+  const el = document.getElementById(id);
+  if (el) el.style.width = Math.min(100, Math.max(0, pct)) + '%';
+}
+
+function rotateRose(deg) {
+  const el = document.getElementById('wind-arrow');
+  if (el) el.style.transform = 'rotate(' + deg + 'deg)';
+}
+
+function updateDewPoint() {
+  if (tempExtVal !== null && humExtVal !== null) {
+    const dew = calcDewPoint(tempExtVal, humExtVal);
+    if (dew !== null) {
+      setText('dew-point', dew.toFixed(1) + '<span style="font-size:14px;color:rgba(91,200,213,.6)"> °C</span>');
+    }
+  }
+}
+
+// ─── MQTT HANDLER ─────────────────────────────────────────────────────────────
+function handleMessage(topic, payload) {
+  const val = payload.toString().trim();
+  msgCount++;
+  setText('msg-counter', 'msgs recibidos: ' + msgCount);
+  setText('last-ts', new Date().toLocaleTimeString('es-CL'));
+
+  switch(topic) {
+
+    case 'weather/temperatura_exterior': {
+      const v = parseFloat(val);
+      tempExtVal = v;
+      setText('temp-ext', v + '<span class="var-unit">°C</span>');
+      setText('cmp-ext', v + '°');
+      const aw = document.getElementById('aw-temp-ext');
+      if (aw) aw.style.display = 'none';
+      flashCard('card-temp-ext');
+      updateDewPoint();
+      break;
+    }
+
+    case 'weather/temperatura_interior': {
+      const v = parseFloat(val);
+      setText('cmp-int', v + '°');
+      flashCard('card-temp-cmp');
+      break;
+    }
+
+    case 'weather/humedad_exterior': {
+      const v = parseFloat(val);
+      humExtVal = v;
+      setText('hum-ext', v.toFixed(0) + '<span class="var-unit">%</span>');
+      setBar('bar-hum-ext', v);
+      flashCard('card-hum-ext');
+      updateDewPoint();
+      break;
+    }
+
+    case 'weather/humedad_interior': {
+      const v = parseFloat(val);
+      setText('hum-int', v.toFixed(0) + '<span class="var-unit">%</span>');
+      setBar('bar-hum-int', v);
+      flashCard('card-hum-int');
+      break;
+    }
+
+    case 'weather/velocidad_viento': {
+      const v = parseFloat(val);
+      const ms = (v / 3.6).toFixed(2);
+      setText('wind-ms', ms + '<span class="var-unit">m/s</span>');
+      setText('wind-orig', v.toFixed(1) + ' km/h (origen)');
+      setText('wind-kmh', v.toFixed(1) + '<span class="var-unit">km/h</span>');
+      flashCard('card-wind-ms');
+      flashCard('card-wind-kmh');
+      break;
+    }
+
+    case 'weather/velocidad_media': {
+      const v = parseFloat(val);
+      setText('wind-avg', v.toFixed(1) + '<span class="var-unit">km/h</span>');
+      flashCard('card-wind-avg');
+      break;
+    }
+
+    case 'weather/presion': {
+      const v = parseFloat(val);
+      const trend = lastPresVal !== null
+        ? (v > lastPresVal + 0.1 ? '↑ Subiendo' : v < lastPresVal - 0.1 ? '↓ Bajando' : '→ Estable')
+        : '→ Estable';
+      lastPresVal = v;
+      setText('presion', v.toFixed(1) + '<span class="var-unit">hPa</span>');
+      setText('pres-trend-b', 'Tendencia: ' + trend);
+      flashCard('card-presion');
+      break;
+    }
+
+    case 'weather/presion_tendencia': {
+      // Python publica texto: "Bajando rapido", "Bajando", "Estable", "Subiendo", "Subiendo rapido"
+      const iconos = {
+        'Bajando rapido': '↓↓ ',
+        'Bajando':        '↓ ',
+        'Estable':        '→ ',
+        'Subiendo':       '↑ ',
+        'Subiendo rapido':'↑↑ '
+      };
+      const icono = iconos[val] || '';
+      setText('pres-tend-val', icono + val);
+      flashCard('card-pres-tend');
+      break;
+    }
+
+    case 'weather/direccion_viento': {
+      const deg = parseFloat(val);
+      if (!isNaN(deg)) {
+        rotateRose(deg);
+        setText('wind-dir-deg', deg.toFixed(0) + '°');
+        flashCard('card-rosa');
+      }
+      break;
+    }
+
+    case 'weather/direccion_rosa': {
+      setText('wind-dir-text', val);
+      // si viene texto como "NE", buscar grados
+      if (DIR_MAP.hasOwnProperty(val)) {
+        rotateRose(DIR_MAP[val]);
+        setText('wind-dir-deg', DIR_MAP[val] + '°');
+      }
+      flashCard('card-rosa');
+      break;
+    }
+
+    case 'weather/fecha': {
+      setText('fecha', val);
+      setText('fecha2', val);
+      flashCard('card-fecha');
+      flashCard('card-fecha2');
+      break;
+    }
+
+    case 'weather/hora_local': {
+      setText('hora-local', val);
+      flashCard('card-hora');
+      break;
+    }
+
+    case 'weather/hora_utc': {
+      setText('hora-utc', val);
+      flashCard('card-hora-utc');
+      break;
+    }
+
+    case 'weather/lluvia_mm': {
+      const v = parseFloat(val);
+      setText('lluvia', v.toFixed(1) + '<span class="var-unit">mm</span>');
+      flashCard('card-lluvia');
+      break;
+    }
+
+    case 'weather/uv_index': {
+      if (val === 'Sin sensor' || val === '') {
+        setText('uv-val', '—');
+        setText('uv-label', 'Sin sensor');
+        break;
+      }
+      const v = parseFloat(val);
+      const idx = Math.min(11, Math.floor(v));
+      setText('uv-val', v.toFixed(1));
+      setText('uv-label', (UV_LABELS[idx] || 'Índice UV') + ' · UV');
+      document.getElementById('uv-fill').style.width = Math.min(100, v / 11 * 100) + '%';
+      flashCard('card-uv');
+      break;
+    }
+
+    case 'weather/solar_wm2': {
+      if (val === 'Sin sensor' || val === '') {
+        setText('solar', '— <span class="var-unit">sin sensor</span>');
+        break;
+      }
+      const v = parseFloat(val);
+      setText('solar', Math.round(v).toLocaleString('es-CL') + '<span class="var-unit">W/m²</span>');
+      setBar('bar-solar', v / 1200 * 100);
+      flashCard('card-solar');
+      break;
+    }
+
+    case 'weather/status': {
+      setText('status-val', '<span style="color:#4DFFD2">● </span>' + val);
+      flashCard('card-status');
+      break;
+    }
+
+    case 'weather/cobertura_nubes': {
+      setText('nubes-val', val);
+      break;
+    }
+  }
+}
+
+// ─── CONNECT ─────────────────────────────────────────────────────────────────
+function connectMQTT() {
+  const clientId = 'uv_dashboard_' + Math.random().toString(16).substr(2, 8);
+  const url      = 'ws://' + MQTT_HOST + ':' + MQTT_PORT_WS + '/mqtt';
+
+  const client = mqtt.connect(url, {
+    clientId,
+    username: MQTT_USER,
+    password: MQTT_PASSWORD,
+    clean: true,
+    reconnectPeriod: 5000,
+    connectTimeout: 10000
+  });
+
+  client.on('connect', () => {
+    document.getElementById('sdot').className = 'status-dot connected';
+    document.getElementById('conn-label').textContent = 'Conectado';
+    const bar = document.getElementById('conn-bar');
+    bar.className = 'ok';
+    document.getElementById('conn-msg').textContent =
+      'Conectado a ' + MQTT_HOST + ':' + MQTT_PORT_WS + ' · ' + TOPICS.length + ' tópicos suscritos · QoS(1)';
+
+    // subscribe all topics
+    TOPICS.forEach(t => client.subscribe(t, { qos: MQTT_QOS }));
+  });
+
+  client.on('message', (topic, message) => {
+    try { handleMessage(topic, message); } catch(e) { console.warn(e); }
+  });
+
+  client.on('reconnect', () => {
+    document.getElementById('sdot').className = 'status-dot';
+    document.getElementById('conn-label').textContent = 'Reconectando…';
+    const bar = document.getElementById('conn-bar');
+    bar.className = '';
+    document.getElementById('conn-msg').textContent = 'Reconectando al broker MQTT…';
+  });
+
+  client.on('error', (err) => {
+    document.getElementById('sdot').className = 'status-dot error';
+    document.getElementById('conn-label').textContent = 'Error';
+    const bar = document.getElementById('conn-bar');
+    bar.className = '';
+    document.getElementById('conn-msg').textContent = 'Error MQTT: ' + err.message;
+
+    // Intentar puerto alternativo 8083 (ws) o 8080
+    if (err.message && err.message.includes('refused')) {
+      console.warn('Puerto WS 9001 rechazado, revisa configuración Mosquitto.');
+    }
+  });
+
+  client.on('offline', () => {
+    document.getElementById('sdot').className = 'status-dot error';
+    document.getElementById('conn-label').textContent = 'Sin conexión';
+  });
+
+  return client;
+}
+
+// ─── INIT ────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', connectMQTT);
+</script>
+</body>
+</html>

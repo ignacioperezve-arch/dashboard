@@ -473,7 +473,7 @@ html,body{height:100%;background:#041624;}
 <script>
 // ─── MQTT CONFIG ─────────────────────────────────────────────────────────────
 const MQTT_HOST     = "161.35.98.146";
-const MQTT_PORT_WS  = 9001;          // Puerto WebSocket de Mosquitto — asegúrate de tener en mosquitto.conf: listener 9001 / protocol websockets
+const MQTT_PORT_WS  = 15675;         // Puerto WebSocket de RabbitMQ (rabbitmq_web_mqtt plugin)
 const MQTT_USER     = "ignacio";
 const MQTT_PASSWORD = "Uv2025doc.";
 const MQTT_QOS      = 1;
@@ -738,7 +738,7 @@ function handleMessage(topic, payload) {
 // ─── CONNECT ─────────────────────────────────────────────────────────────────
 function connectMQTT() {
   const clientId = 'uv_dashboard_' + Math.random().toString(16).substr(2, 8);
-  const url      = 'ws://' + MQTT_HOST + ':' + MQTT_PORT_WS + '/mqtt';
+  const url      = 'ws://' + MQTT_HOST + ':' + MQTT_PORT_WS + '/ws';
 
   const client = mqtt.connect(url, {
     clientId,
@@ -782,7 +782,7 @@ function connectMQTT() {
 
     // Intentar puerto alternativo 8083 (ws) o 8080
     if (err.message && err.message.includes('refused')) {
-      console.warn('Puerto WS 9001 rechazado, revisa configuración Mosquitto.');
+      console.warn('Puerto WS 15675 rechazado, verifica que rabbitmq_web_mqtt esté activo y UFW permita el puerto.');
     }
   });
 
